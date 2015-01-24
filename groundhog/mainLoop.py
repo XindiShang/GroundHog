@@ -112,7 +112,6 @@ class MainLoop(object):
         self.l2_params = l2_params
 
         self.train_cost = train_cost
-
         if hooks and not isinstance(hooks, (list, tuple)):
             hooks = [hooks]
 

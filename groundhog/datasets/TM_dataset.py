@@ -8,6 +8,7 @@ __authors__ = ("Razvan Pascanu "
 __contact__ = "Razvan Pascanu <r.pascanu@gmail>"
 
 import numpy as np
+from theano import config
 
 import os, gc
 
@@ -160,10 +161,11 @@ class TMIterator(object):
             return self.output_format(source_data, target_data)
 
 class PytablesBitextFetcher(threading.Thread):
-    def __init__(self, parent, start_offset):
+    def __init__(self, parent, start_offset, fixed_source):
         threading.Thread.__init__(self)
         self.parent = parent
         self.start_offset = start_offset
+        self.fixed_source = fixed_source
 
     def run(self):
         diter = self.parent
@@ -176,12 +178,17 @@ class PytablesBitextFetcher(threading.Thread):
         target_data, target_index = (target_table.get_node(diter.table_name),
             target_table.get_node(diter.index_name))
 
-        source_table = tables.open_file(diter.source_file, 'r', driver=driver)
-        source_data, source_index = (source_table.get_node(diter.table_name),
-            source_table.get_node(diter.index_name))
-
-        assert source_index.shape[0] == target_index.shape[0]
-        data_len = source_index.shape[0]
+        if self.fixed_source:
+            source_table = tables.open_file(diter.source_file, 'r', driver = driver)
+            source_data = source_table.get_node('/feature')
+            assert source_data.shape[0] == target_index.shape[0]
+            data_len = source_data.shape[0]
+        else:
+            source_table = tables.open_file(diter.source_file, 'r', driver=driver)
+            source_data, source_index = (source_table.get_node(diter.table_name),
+                    source_table.get_node(diter.index_name))
+            assert source_index.shape[0] == target_index.shape[0]
+            data_len = source_index.shape[0]
 
         offset = self.start_offset
         if offset == -1:
@@ -203,14 +210,22 @@ class PytablesBitextFetcher(threading.Thread):
                         last_batch = True
                         break
 
-                slen, spos = source_index[offset]['length'], source_index[offset]['pos']
+                if self.fixed_source:
+                    slen = 0 # to pass the later check 
+                else:
+                    slen, spos = source_index[offset]['length'], source_index[offset]['pos']
                 tlen, tpos = target_index[offset]['length'], target_index[offset]['pos']
-                offset += 1
 
                 if slen > diter.max_len or tlen > diter.max_len:
+                    offset += 1
                     continue
-                source_sents.append(source_data[spos:spos + slen].astype(diter.dtype))
+                if self.fixed_source:
+                    source_sents.append(source_data[offset, :].astype(config.floatX))
+                else:
+                    source_sents.append(source_data[spos:spos + slen].astype(diter.dtype))
                 target_sents.append(target_data[tpos:tpos + tlen].astype(diter.dtype))
+
+                offset += 1
 
             if len(source_sents):
                 diter.queue.put([int(offset), source_sents, target_sents])
@@ -224,6 +239,7 @@ class PytablesBitextIterator(object):
                  batch_size,
                  target_file=None,
                  source_file=None,
+                 fixed_source=False,
                  dtype="int64",
                  table_name='/phrases',
                  index_name='/indices',
@@ -242,7 +258,7 @@ class PytablesBitextIterator(object):
 
     def start(self, start_offset):
         self.queue = Queue.Queue(maxsize=self.queue_size)
-        self.gather = PytablesBitextFetcher(self, start_offset)
+        self.gather = PytablesBitextFetcher(self, start_offset, self.fixed_source)
         self.gather.daemon = True
         self.gather.start()
 

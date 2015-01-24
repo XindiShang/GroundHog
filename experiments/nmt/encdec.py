@@ -29,7 +29,7 @@ import groundhog.utils as utils
 
 logger = logging.getLogger(__name__)
 
-def create_padded_batch(state, x, y, return_dict=False):
+def create_padded_batch(state, x, y, return_dict=False, fixed_X = False):
     """A callback given to the iterator to transform data in suitable format
 
     :type x: list
@@ -57,55 +57,61 @@ def create_padded_batch(state, x, y, return_dict=False):
     my = state['seqlen']
     if state['trim_batches']:
         # Similar length for all source sequences
-        mx = numpy.minimum(state['seqlen'], max([len(xx) for xx in x[0]]))+1
+        if not fixed_X:
+            mx = numpy.minimum(state['seqlen'], max([len(xx) for xx in x[0]]))+1
         # Similar length for all target sequences
         my = numpy.minimum(state['seqlen'], max([len(xx) for xx in y[0]]))+1
 
     # Batch size
-    n = x[0].shape[0]
+    n = y[0].shape[0]
 
-    X = numpy.zeros((mx, n), dtype='int64')
+    if not fixed_X:
+        X = numpy.zeros((mx, n), dtype='int64')
+        Xmask = numpy.zeros((mx, n), dtype='float32')
     Y = numpy.zeros((my, n), dtype='int64')
-    Xmask = numpy.zeros((mx, n), dtype='float32')
     Ymask = numpy.zeros((my, n), dtype='float32')
 
     # Fill X and Xmask
-    for idx in xrange(len(x[0])):
-        # Insert sequence idx in a column of matrix X
-        if mx < len(x[0][idx]):
-            X[:mx, idx] = x[0][idx][:mx]
-        else:
-            X[:len(x[0][idx]), idx] = x[0][idx][:mx]
+    if not fixed_X:
+        for idx in xrange(len(x[0])):
+            # Insert sequence idx in a column of matrix X
+            if mx < len(x[0][idx]):
+                X[:mx, idx] = x[0][idx][:mx]
+            else:
+                X[:len(x[0][idx]), idx] = x[0][idx][:mx]
 
-        # Mark the end of phrase
-        if len(x[0][idx]) < mx:
-            X[len(x[0][idx]):, idx] = state['null_sym_source']
+            # Mark the end of phrase
+            if len(x[0][idx]) < mx:
+                X[len(x[0][idx]):, idx] = state['null_sym_source']
 
-        # Initialize Xmask column with ones in all positions that
-        # were just set in X
-        Xmask[:len(x[0][idx]), idx] = 1.
-        if len(x[0][idx]) < mx:
-            Xmask[len(x[0][idx]), idx] = 1.
+            # Initialize Xmask column with ones in all positions that
+            # were just set in X
+            Xmask[:len(x[0][idx]), idx] = 1.
+            if len(x[0][idx]) < mx:
+                Xmask[len(x[0][idx]), idx] = 1.
 
     # Fill Y and Ymask in the same way as X and Xmask in the previous loop
     for idx in xrange(len(y[0])):
-        Y[:len(y[0][idx]), idx] = y[0][idx][:my]
+        if my < len(y[0][idx]):
+            Y[:my, idx] = y[0][idx][:my]
+        else:
+            Y[:len(y[0][idx]), idx] = y[0][idx][:my]
         if len(y[0][idx]) < my:
             Y[len(y[0][idx]):, idx] = state['null_sym_target']
         Ymask[:len(y[0][idx]), idx] = 1.
         if len(y[0][idx]) < my:
             Ymask[len(y[0][idx]), idx] = 1.
 
-    null_inputs = numpy.zeros(X.shape[1])
+    null_inputs = numpy.zeros(Y.shape[1])
 
     # We say that an input pair is valid if both:
     # - either source sequence or target sequence is non-empty
     # - source sequence and target sequence have null_sym ending
     # Why did not we filter them earlier?
-    for idx in xrange(X.shape[1]):
-        if numpy.sum(Xmask[:,idx]) == 0 and numpy.sum(Ymask[:,idx]) == 0:
+    for idx in xrange(Y.shape[1]):
+        if (not fixed_X and numpy.sum(Xmask[:,idx]) == 0) and numpy.sum(Ymask[:,idx]) == 0:
             null_inputs[idx] = 1
-        if Xmask[-1,idx] and X[-1,idx] != state['null_sym_source']:
+        if not fixed_X and Xmask[-1,idx] and X[-1,idx] != state['null_sym_source']:
             null_inputs[idx] = 1
         if Ymask[-1,idx] and Y[-1,idx] != state['null_sym_target']:
             null_inputs[idx] = 1
@@ -113,30 +119,37 @@ def create_padded_batch(state, x, y, return_dict=False):
     valid_inputs = 1. - null_inputs
 
     # Leave only valid inputs
-    X = X[:,valid_inputs.nonzero()[0]]
+    if fixed_X:
+        X = x[0][valid_inputs.nonzero()[0], :]
+        Xmask = None
+    else:
+        X = X[:,valid_inputs.nonzero()[0]]
+        Xmask = Xmask[:,valid_inputs.nonzero()[0]]
     Y = Y[:,valid_inputs.nonzero()[0]]
-    Xmask = Xmask[:,valid_inputs.nonzero()[0]]
     Ymask = Ymask[:,valid_inputs.nonzero()[0]]
     if len(valid_inputs.nonzero()[0]) <= 0:
         return None
 
     # Unknown words
-    X[X >= state['n_sym_source']] = state['unk_sym_source']
+    if not fixed_X:
+        X[X >= state['n_sym_source']] = state['unk_sym_source']
     Y[Y >= state['n_sym_target']] = state['unk_sym_target']
 
     if return_dict:
         return {'x' : X, 'x_mask' : Xmask, 'y': Y, 'y_mask' : Ymask}
     else:
+        assert not fixed_X
         return X, Xmask, Y, Ymask
 
 def get_batch_iterator(state):
 
     class Iterator(PytablesBitextIterator):
 
-        def __init__(self, *args, **kwargs):
-            PytablesBitextIterator.__init__(self, *args, **kwargs)
+        def __init__(self, fixed_source=False, *args, **kwargs):
+            PytablesBitextIterator.__init__(self, fixed_source = fixed_source, *args, **kwargs)
             self.batch_iter = None
             self.peeked_batch = None
+            self.fixed_source = fixed_source
 
         def get_homogenous_batch_iter(self):
             while True:
@@ -155,9 +168,29 @@ def get_batch_iterator(state):
                     if batch:
                         yield batch
 
+        def get_heterogenous_batch_iter(self):
+            while True:
+                k_batches = state['sort_k_batches']
+                batch_size = state['bs']
+                data = [PytablesBitextIterator.next(self) for k in range(k_batches)]
+                x = numpy.asarray(list(itertools.chain(*map(operator.itemgetter(0), data))))
+                y = numpy.asarray(list(itertools.chain(*map(operator.itemgetter(1), data))))
+                lens = numpy.asarray(map(len, y))
+                order = numpy.argsort(lens if state['sort_k_batches'] > 1 \
+                        else numpy.arange(len(y)))
+                for k in range(k_batches):
+                    indices = order[k * batch_size:(k + 1) * batch_size]
+                    batch = create_padded_batch(state, [x[indices]], [y[indices]],
+                            return_dict=True, fixed_X = True)
+                    if batch:
+                        yield batch
+
         def next(self, peek=False):
             if not self.batch_iter:
-                self.batch_iter = self.get_homogenous_batch_iter()
+                if self.fixed_source:
+                    self.batch_iter = self.get_heterogenous_batch_iter()
+                else:
+                    self.batch_iter = self.get_homogenous_batch_iter()
 
             if self.peeked_batch:
                 # Only allow to peek one batch
@@ -178,6 +211,7 @@ def get_batch_iterator(state):
         batch_size=int(state['bs']),
         target_file=state['target'][0],
         source_file=state['source'][0],
+        fixed_source=state['fixed_source'],
         can_fit=False,
         queue_size=1000,
         shuffle=state['shuffle'],
@@ -1295,14 +1329,14 @@ class RNNEncoderDecoder(object):
 
     def build(self):
         logger.debug("Create input variables")
-        self.x = TT.lmatrix('x')
+        if self.state['fixed_source']:
+            self.x = TT.matrix('x')
+        else:
+            self.x = TT.lmatrix('x')
         self.x_mask = TT.matrix('x_mask')
         self.y = TT.lmatrix('y')
         self.y_mask = TT.matrix('y_mask')
         self.inputs = [self.x, self.y, self.x_mask, self.y_mask]
-
-        # Annotation for the log-likelihood computation
-        training_c_components = []
 
         logger.debug("Create encoder")
         self.encoder = Encoder(self.state, self.rng,
@@ -1310,39 +1344,45 @@ class RNNEncoderDecoder(object):
                 skip_init=self.skip_init)
         self.encoder.create_layers()
 
-        logger.debug("Build encoding computation graph")
-        forward_training_c = self.encoder.build_encoder(
-                self.x, self.x_mask,
-                use_noise=True,
-                return_hidden_layers=True)
-
         logger.debug("Create backward encoder")
         self.backward_encoder = Encoder(self.state, self.rng,
                 prefix="back_enc",
                 skip_init=self.skip_init)
         self.backward_encoder.create_layers()
 
-        logger.debug("Build backward encoding computation graph")
-        backward_training_c = self.backward_encoder.build_encoder(
-                self.x[::-1],
-                self.x_mask[::-1],
-                use_noise=True,
-                approx_embeddings=self.encoder.approx_embedder(self.x[::-1]),
-                return_hidden_layers=True)
-        # Reverse time for backward representations.
-        backward_training_c.out = backward_training_c.out[::-1]
+        # Annotation for the log-likelihood computation
+        training_c_components = []
 
-        if self.state['forward']:
-            training_c_components.append(forward_training_c)
-        if self.state['last_forward']:
-            training_c_components.append(
-                    ReplicateLayer(self.x.shape[0])(forward_training_c[-1]))
-        if self.state['backward']:
-            training_c_components.append(backward_training_c)
-        if self.state['last_backward']:
-            training_c_components.append(ReplicateLayer(self.x.shape[0])
-                    (backward_training_c[0]))
-        self.state['c_dim'] = len(training_c_components) * self.state['dim']
+        if self.state['fixed_source']:
+            training_c_components.append(ReplicateLayer(self.y.shape[0])(self.x))
+            self.state['c_dim'] = self.state['source_dim']
+        else:
+            logger.debug("Build encoding computation graph")
+            forward_training_c = self.encoder.build_encoder(
+                    self.x, self.x_mask,
+                    use_noise=True,
+                    return_hidden_layers=True)
+            logger.debug("Build backward encoding computation graph")
+            backward_training_c = self.backward_encoder.build_encoder(
+                    self.x[::-1],
+                    self.x_mask[::-1],
+                    use_noise=True,
+                    approx_embeddings=self.encoder.approx_embedder(self.x[::-1]),
+                    return_hidden_layers=True)
+            # Reverse time for backward representations.
+            backward_training_c.out = backward_training_c.out[::-1]
+
+            if self.state['forward']:
+                training_c_components.append(forward_training_c)
+            if self.state['last_forward']:
+                training_c_components.append(
+                        ReplicateLayer(self.x.shape[0])(forward_training_c[-1]))
+            if self.state['backward']:
+                training_c_components.append(backward_training_c)
+            if self.state['last_backward']:
+                training_c_components.append(ReplicateLayer(self.x.shape[0])
+                        (backward_training_c[0]))
+            self.state['c_dim'] = len(training_c_components) * self.state['dim']
 
         logger.debug("Create decoder")
         self.decoder = Decoder(self.state, self.rng,
@@ -1356,29 +1396,37 @@ class RNNEncoderDecoder(object):
         # Annotation for sampling
         sampling_c_components = []
 
-        logger.debug("Build sampling computation graph")
-        self.sampling_x = TT.lvector("sampling_x")
+        if self.state['fixed_source']:
+            self.sampling_x = TT.vector("sampling_x")
+        else:
+            self.sampling_x = TT.lvector("sampling_x")
         self.n_samples = TT.lscalar("n_samples")
         self.n_steps = TT.lscalar("n_steps")
         self.T = TT.scalar("T")
-        self.forward_sampling_c = self.encoder.build_encoder(
-                self.sampling_x,
-                return_hidden_layers=True).out
-        self.backward_sampling_c = self.backward_encoder.build_encoder(
-                self.sampling_x[::-1],
-                approx_embeddings=self.encoder.approx_embedder(self.sampling_x[::-1]),
-                return_hidden_layers=True).out[::-1]
-        if self.state['forward']:
-            sampling_c_components.append(self.forward_sampling_c)
-        if self.state['last_forward']:
+        if self.state['fixed_source']:
             sampling_c_components.append(ReplicateLayer(self.sampling_x.shape[0])
-                    (self.forward_sampling_c[-1]))
-        if self.state['backward']:
-            sampling_c_components.append(self.backward_sampling_c)
-        if self.state['last_backward']:
-            sampling_c_components.append(ReplicateLayer(self.sampling_x.shape[0])
-                    (self.backward_sampling_c[0]))
-
+                    (self.sampling_x))
+        else:
+            logger.debug("Build sampling computation graph")
+            self.forward_sampling_c = self.encoder.build_encoder(
+                    self.sampling_x,
+                    return_hidden_layers=True).out
+            logger.debug("Build backward sampling computation graph")
+            self.backward_sampling_c = self.backward_encoder.build_encoder(
+                    self.sampling_x[::-1],
+                    approx_embeddings=self.encoder.approx_embedder(self.sampling_x[::-1]),
+                    return_hidden_layers=True).out[::-1]
+            if self.state['forward']:
+                sampling_c_components.append(self.forward_sampling_c)
+            if self.state['last_forward']:
+                sampling_c_components.append(ReplicateLayer(self.sampling_x.shape[0])
+                        (self.forward_sampling_c[-1]))
+            if self.state['backward']:
+                sampling_c_components.append(self.backward_sampling_c)
+            if self.state['last_backward']:
+                sampling_c_components.append(ReplicateLayer(self.sampling_x.shape[0])
+                        (self.backward_sampling_c[0]))
+        
         self.sampling_c = Concatenate(axis=1)(*sampling_c_components).out
         (self.sample, self.sample_log_prob), self.sampling_updates =\
             self.decoder.build_sampler(self.n_samples, self.n_steps, self.T,

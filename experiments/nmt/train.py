@@ -6,6 +6,8 @@ import logging
 import pprint
 
 import numpy
+import sys
+sys.path.insert(0, '/home/xindi/workspace/GroundHog/')
 
 from groundhog.trainer.SGD_adadelta import SGD as SGD_adadelta
 from groundhog.trainer.SGD import SGD as SGD

@@ -39,3 +39,6 @@ nosetests.xml
 *.npz
 *.npy
 *.pkl
+
+# data file
+data/
