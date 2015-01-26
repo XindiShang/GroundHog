@@ -37,19 +37,28 @@ class RandomSamplePrinter(object):
         while sample_idx < self.state['n_examples']:
             batch = self.train_iter.next(peek=True)
             xs, ys = batch['x'], batch['y']
-            for seq_idx in range(xs.shape[1]):
+            for seq_idx in range(ys.shape[1]):
                 if sample_idx == self.state['n_examples']:
                     break
 
-                x, y = xs[:, seq_idx], ys[:, seq_idx]
-                x_words = cut_eol(map(lambda w_idx : self.model.word_indxs_src[w_idx], x))
+                if self.state['fixed_source']:
+                    x = xs[seq_idx, :]
+                    # TODO: how to obtain x_id
+                else:
+                    x = xs[:, seq_idx]
+                    x_words = cut_eol(map(lambda w_idx : self.model.word_indxs_src[w_idx], x))
+                    if len(x_words) == 0:
+                        continue
+                y = ys[:, seq_idx]
                 y_words = cut_eol(map(lambda w_idx : self.model.word_indxs[w_idx], y))
-                if len(x_words) == 0:
-                    continue
 
-                print "Input: {}".format(" ".join(x_words))
-                print "Target: {}".format(" ".join(y_words))
-                self.model.get_samples(self.state['seqlen'] + 1, self.state['n_samples'], x[:len(x_words)])
+                if self.state['fixed_source']:
+                    print "Target: {}".format(" ".join(y_words))
+                    self.model.get_samples(self.state['seqlen'] + 1, self.state['n_samples'], x)
+                else:
+                    print "Input: {}".format(" ".join(x_words))
+                    print "Target: {}".format(" ".join(y_words))
+                    self.model.get_samples(self.state['seqlen'] + 1, self.state['n_samples'], x[:len(x_words)])
                 sample_idx += 1
 
 def parse_args():

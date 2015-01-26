@@ -928,20 +928,21 @@ class SoftmaxLayer(CostLayer):
                 print
                 print
         else:
-            print 'Input:  ',
-            if character_level:
-                sen = []
-                for k in xrange(inps[0].shape[0]):
-                    if model.word_indxs_src[inps[0][k]] == '<eol>':
-                        break
-                    sen.append(model.word_indxs_src[inps[0][k]])
-                print "".join(sen),
-            else:
-                for k in xrange(inps[0].shape[0]):
-                    print model.word_indxs_src[inps[0][k]],
-                    if model.word_indxs_src[inps[0][k]] == '<eol>':
-                        break
-            print ''
+            if inps[0].dtype == 'int64':
+                print 'Input:  ',
+                if character_level:
+                    sen = []
+                    for k in xrange(inps[0].shape[0]):
+                        if model.word_indxs_src[inps[0][k]] == '<eol>':
+                            break
+                        sen.append(model.word_indxs_src[inps[0][k]])
+                    print "".join(sen),
+                else:
+                    for k in xrange(inps[0].shape[0]):
+                        print model.word_indxs_src[inps[0][k]],
+                        if model.word_indxs_src[inps[0][k]] == '<eol>':
+                            break
+                print ''
             print 'Output: ',
             if character_level:
                 sen = []

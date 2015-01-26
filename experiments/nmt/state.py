@@ -217,10 +217,10 @@ def prototype_fixed_c_state():
 
     state = prototype_state()
 
-    state['source'] = ["image_train.h5"]
-    state['target'] = ["binarized_train_text.h5"]
-    state['indx_word_target'] = "ivocab_train.pkl"
-    state['word_indx_trgt'] = "vocab_train.pkl"
+    state['source'] = ["data/image_train.h5"]
+    state['target'] = ["data/binarized_train_text.h5"]
+    state['indx_word_target'] = "data/ivocab_train.pkl"
+    state['word_indx_trgt'] = "data/vocab_train.pkl"
 
     state['fixed_source'] = True
     state['source_dim'] = 4096
@@ -229,8 +229,6 @@ def prototype_fixed_c_state():
     state['null_sym_target'] = 22255
     state['n_sym_source'] = state['null_sym_source'] + 1
     state['n_sym_target'] = state['null_sym_target'] + 1
-
-    state['hookFreq'] = -1
 
     return state
 
